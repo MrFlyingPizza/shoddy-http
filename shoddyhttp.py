@@ -1,21 +1,15 @@
 import logging
-import select
 import os
-import cgi
-import cgitb
-cgitb.enable()
-import io
-import mimetypes
+import shutil
 
 from enum import Enum
+from pathlib import Path
 from socket import socket, AF_INET, SOCK_STREAM
 from typing import Tuple, Dict
 
 HostAndPort = Tuple[str, str]
 
 Headers = Dict[str, any]
-
-path = os.getcwd()
 
 
 class HttpMethod(Enum):
@@ -28,12 +22,16 @@ class HttpMethod(Enum):
     POST = "POST"
     DELETE = "DELETE"
 
+    UNSUPPORTED = "UNSUPPORTED"
+
 
 class HttpVersion(Enum):
     """
     HTTP protocols.
     """
     HTTP_1_1 = "HTTP/1.1"
+
+    UNSUPPORTED = "UNSUPPORTED"
 
 
 class HttpStatusCode(Enum):
@@ -44,6 +42,7 @@ class HttpStatusCode(Enum):
     NOT_MODIFIED = 304
     BAD_REQUEST = 300
     NOT_FOUND = 404
+    METHOD_NOT_ALLOWED = 405
     REQUEST_TIMED_OUT = 408
 
 
@@ -55,6 +54,7 @@ class HttpStatusMessage(Enum):
     NOT_MODIFIED = "Not Modified"
     BAD_REQUEST = "Bad Request"
     NOT_FOUND = "Not Found"
+    METHOD_NOT_ALLOWED = "Method Not Allowed"
     REQUEST_TIMED_OUT = "Request Timed Out"
 
 
@@ -173,7 +173,7 @@ def http_request_from_raw(raw_request: str) -> HttpRequest:
     top_section, body = raw_request.split("\r\n\r\n", maxsplit=1)
     top_lines = top_section.split("\r\n")
 
-    method, url, version = top_lines[0].split(" ")
+    method_str, url, version_str = top_lines[0].split(" ")
     header_lines = top_lines[1:]
 
     headers: Headers = {}
@@ -181,16 +181,160 @@ def http_request_from_raw(raw_request: str) -> HttpRequest:
         key, value = line.split(": ")
         headers[key] = value
 
-    return HttpRequest(method=HttpMethod(method), url=url, version=HttpVersion(version), headers=headers, body=body)
+    method = HttpMethod.UNSUPPORTED
+    if method_str in [val.value for val in HttpMethod]:
+        method = HttpMethod(method_str)
+
+    version = HttpVersion.UNSUPPORTED
+    if version_str in [val.value for val in HttpVersion]:
+        version = HttpVersion(version_str)
+
+    return HttpRequest(method=method, url=url, version=version, headers=headers,
+                       body=body)
 
 
 class HttpResponses:
     """
     A class for holding typical responses that can be used repeatedly, like Request Timed Out or Not Found.
     """
-    TIMEOUT = HttpResponse(status=HttpStatusCode.REQUEST_TIMED_OUT)
+    __TIMEOUT_BODY = "REQUEST TIMED OUT."
+    TIMEOUT = HttpResponse(status=HttpStatusCode.REQUEST_TIMED_OUT, headers={"Content-Length": len(__TIMEOUT_BODY)},
+                           data=__TIMEOUT_BODY)
 
-    NOT_FOUND = HttpResponse(status=HttpStatusCode.NOT_FOUND, headers={"Content-Length": 0})
+    __NOT_FOUND_BODY = "NOT FOUND."
+    NOT_FOUND = HttpResponse(status=HttpStatusCode.NOT_FOUND, headers={"Content-Length": len(__NOT_FOUND_BODY)},
+                             data=__NOT_FOUND_BODY)
+
+    __BAD_REQUEST_BODY = "BAD REQUEST."
+    BAD_REQUEST = HttpResponse(status=HttpStatusCode.BAD_REQUEST, headers={"Content-Length": len(__BAD_REQUEST_BODY)},
+                               data=__BAD_REQUEST_BODY)
+
+    __SUCCESS_BODY = "SUCCESS."
+    OK = HttpResponse(headers={"Content-Length": len(__SUCCESS_BODY)}, data=__SUCCESS_BODY)
+
+    __METHOD_NOT_ALLOWED_BODY = "METHOD NOT ALLOWED"
+    METHOD_NOT_ALLOWED = HttpResponse(status=HttpStatusCode.METHOD_NOT_ALLOWED,
+                                      headers={"Content-Length": len(__METHOD_NOT_ALLOWED_BODY)},
+                                      data=__METHOD_NOT_ALLOWED_BODY)
+
+
+class ContentHandler:
+    def __init__(self, content_dir: str = "/content"):
+        """
+        Constructs a content handler to operate on content in the given directory.
+        :param content_dir: The directory to serve content from. If this directory does not exist, the constructor
+        will create it. All paths must be in the form "/{pathname}" where there is no trailing slash.
+        :raises OSError: on exception.
+        """
+        path = Path(content_dir)
+        if not path.is_dir():
+            self.__log(f"The directory '{str(path)}' does not exist. It will be created.")
+            path.mkdir(parents=True)
+
+        self.content_dir = content_dir
+
+    def __make_path(self, path: str):
+        """
+        Constructs a path from the content path and the given path.
+        :param path: The path inside the content path.
+        :return: A string that has the content path and the given path concatenated.
+        :raises OSError: on exception.
+        """
+        return self.content_dir + path
+
+    def __log(self, message: str, level: int = logging.INFO):
+        """
+        Logs message of given level.
+        :param message: Message to be logged.
+        :param level: Logging level.
+        """
+        logging.log(level, f"{self.__repr__()}: {message}")
+
+    def retrieve(self, path_str: str) -> str | None:
+        """
+        Retrieves the string content of a file if it exists, otherwise None.
+        :param path_str: The path of the file.
+        :return: Returns the contents of a file if it exists, or None if it doesn't.
+        :raises OSError: on exception.
+        """
+        path_str = self.__make_path(path_str)
+
+        path = Path(path_str)
+
+        self.__log(f"Handling retrieval of '{str(path)}'")
+
+        result: str | None = None
+        if path.is_file():
+            result = path.read_text()
+
+        return result
+
+    def create(self, path_str: str, content: str) -> bool:
+        """
+        Saves given string contents to the file specified by the path if it doesn't exist.
+        :param path_str: The path to save the contents at.
+        :param content: The contents of the file.
+        :return: True if successfully saved, False if not found.
+        :raises OSError: on exception.
+        """
+        path_str = self.__make_path(path_str)
+
+        path = Path(path_str)
+
+        self.__log(f"Handling creation of '{str(path)}'")
+
+        if path.is_file():
+            return False
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+
+        return True
+
+    def delete(self, path_str: str) -> bool:
+        """
+        Deletes the given path if it exists. Can be both files or directories.
+        :param path_str: The path to be deleted.
+        :return: True if successful, False if not found.
+        :raises OSError: on exception.
+        """
+        path_str = self.__make_path(path_str)
+
+        path = Path(path_str)
+
+        self.__log(f"Handling deletion of '{str(path)}'")
+
+        if path.is_file():
+            path.unlink()
+            return True
+
+        if path.is_dir():
+            path.rmdir()
+            shutil.rmtree(path)
+            return True
+
+        return False
+
+    def replace(self, path_str: str, content: str) -> bool:
+        """
+        Replaces the contents of the file at the specified path if it exists.
+        :param path_str: The path of the file to replace contents at.
+        :param content: The contents to be replaced with.
+        :return: True if successfully replaced, False if not found.
+        :raises OSError: on exception.
+        """
+        path_str = self.__make_path(path_str)
+
+        path = Path(path_str)
+
+        self.__log(f"Handling replacement of '{str(path)}'")
+
+        if path.is_file():
+            path.unlink()
+            path.write_text(content)
+            return True
+
+        return False
 
 
 class RequestHandler:
@@ -200,54 +344,28 @@ class RequestHandler:
     """
     __INVALID_METHOD_MESSAGE = "This request handler cannot handle the given request based on its request method."
 
-    def __init__(self, connection: socket, address: HostAndPort, timeout=60):
+    def __init__(self, connection: socket, address: HostAndPort, content_handler: ContentHandler, timeout=60):
         """
         The open connection to handle the request using.
         :param connection: The socket of the open connection.
         :param timeout: How long to wait for data before sending timeout and closing connection.
+        :param content_handler: The instance of content handler to service content requests using.
         """
+        if not content_handler:
+            raise ValueError("The content handler must be provided.")
+
         self.connection = connection
         self.address = address
         self.timeout = timeout
+        self.content_handler = content_handler
 
-    # ---------------------------------------------------------------------------Added here
-    headers = {
-        'Server': 'ShoddyServer',
-        'Content-Type': 'text/html',
-    }
-
-    status_codes = {
-        200: 'OK',
-        404: 'Not Found',
-        501: 'Not Implemented',
-    }
-
-    
-    def response_line(self, status_code):
-        """Returns response line (as bytes)"""
-        reason = self.status_codes[status_code]
-        response_line = 'HTTP/1.1 %s %s\r\n' % (status_code, reason)
-
-        return response_line.encode() # convert from str to bytes
-
-    def response_headers(self, extra_headers=None):
-        """Returns headers (as bytes).
-        The `extra_headers` can be a dict for sending 
-        extra headers with the current response
+    def __log(self, message: str, level: int = logging.INFO):
         """
-        headers_copy = self.headers.copy() # make a local copy of headers
-
-        if extra_headers:
-            headers_copy.update(extra_headers)
-
-        headers = ''
-
-        for h in headers_copy:
-            headers += '%s: %s\r\n' % (h, headers_copy[h])
-
-        return headers.encode() # convert str to bytes
-
-    #-----------------------------------------------------------------------------------------------End added------------------
+        Logs message of given level.
+        :param message: Message to be logged.
+        :param level: Logging level.
+        """
+        logging.log(level, f"{self.__repr__()}: {message}")
 
     def __receive_request(self, conn: socket) -> HttpRequest | None:
         """
@@ -257,10 +375,9 @@ class RequestHandler:
         """
         s = conn.recv(8192).decode()
 
-        logging.info(f"Received:\n{s}\nfrom:\n{self.address}")
+        self.__log(f"Received from {self.address}:\n{s}\n")
 
         return http_request_from_raw(s)
-
 
     def __handle_get_request(self, request: HttpRequest):
         """
@@ -269,36 +386,21 @@ class RequestHandler:
         Send 404 Not Found if not found by the path.
         :param request: The request object.
         """
+        self.__log(f"Handling GET request from {self.address}")
         if request.method != HttpMethod.GET:
             raise InvalidHttpMethodError(HttpMethod.GET, request.method, self.__INVALID_METHOD_MESSAGE)
 
-        
-        # TODO: implemented
-        path = request.url.strip('/')
+        content = self.content_handler.retrieve(request.url)
 
+        response = HttpResponses.NOT_FOUND
+        if content is not None:
+            headers = {
+                "Content-Length": len(content)
+            }
 
-        if os.path.exists(path) and not os.path.isdir(path): # don't serve directories
-            response_line = self.response_line(200)
+            response = HttpResponse(headers=headers, data=content)
 
-            # find out a file's MIME type
-            # if nothing is found, just send `text/html`
-            content_type = mimetypes.guess_type(path)[0] or 'text/html'
-
-            extra_headers = {'Content-Type': content_type}
-            response_headers = self.response_headers(extra_headers)
-
-            with open(path, 'rb') as f:
-                response_body = f.read()
-        else:
-            response_line = self.response_line(404)
-            response_headers = self.response_headers()
-            response_body = b'<h1>404 Not Found</h1>'
-
-        blank_line = b'\r\n'
-
-        response = b''.join([response_line, response_headers, blank_line, response_body])
-        self.connection.send(response)
-
+        self.__send_response(response)
 
     def __handle_put_request(self, request: HttpRequest):
         """
@@ -307,45 +409,38 @@ class RequestHandler:
         Send 404 Not Found if not found by the path.
         :param request: The request object.
         """
+        self.__log(f"Handling PUT request from {self.address}")
+
         if request.method != HttpMethod.PUT:
             raise InvalidHttpMethodError(HttpMethod.PUT, request.method, self.__INVALID_METHOD_MESSAGE)
 
-        # TODO: implement
-        # self.__send_response(HttpResponses.NOT_FOUND)
+        success = self.content_handler.replace(request.url, request.body)
 
-        import os
-        form = cgi.FieldStorage
-        fi = form.getvalue("filename")
-        if os.path.exists(fi):
-            # This code will strip the leading absolute path from your file-name
-            fil = os.path.basename(fi)
-            # open for reading & writing the file into the server
-            open(fil, 'wb').write(fi.file.read())
+        response = HttpResponses.NOT_FOUND
+        if success:
+            response = HttpResponses.OK
 
+        self.__send_response(response)
 
     def __handle_post_request(self, request: HttpRequest):
         """
         Handles an HTTP request with the POST method.
         It should save the contents of the body to the file system.
-        It should send 400 Bad Request if a file already exists by the given path.
+        It should send 400 Bad Request if the operation fails.
         :param request: The request object.
         """
+        self.__log(f"Handling POST request from {self.address}")
+
         if request.method != HttpMethod.POST:
             raise InvalidHttpMethodError(HttpMethod.POST, request.method, self.__INVALID_METHOD_MESSAGE)
 
-        self.__send_response(HttpResponses.NOT_FOUND) # TODO: remove this stub
-        # TODO: implement
+        success = self.content_handler.create(request.url, request.body)
 
-    def __handle_head_request(self, request: HttpRequest):
-        """
-        Handles an HTTP request with the HEAD method.
-        :param request: The request object.
-        """
-        if request.method != HttpMethod.HEAD:
-            raise InvalidHttpMethodError(HttpMethod.HEAD, request.method, self.__INVALID_METHOD_MESSAGE)
+        response = HttpResponses.BAD_REQUEST
+        if success:
+            response = HttpResponses.OK
 
-        self.__send_response(HttpResponses.NOT_FOUND) # TODO: remove this stub
-        # TODO: implement
+        self.__send_response(response)
 
     def __handle_delete_request(self, request: HttpRequest):
         """
@@ -354,20 +449,26 @@ class RequestHandler:
         Send 404 Not Found if not found by the path.
         :param request: The request object.
         """
+        self.__log(f"Handling DELETE request from {self.address}")
+
         if request.method != HttpMethod.DELETE:
             raise InvalidHttpMethodError(HttpMethod.DELETE, request.method, self.__INVALID_METHOD_MESSAGE)
 
-        self.__send_response(HttpResponses.NOT_FOUND) # TODO: remove this stub
-        # TODO: implement
+        success = self.content_handler.delete(request.url)
+
+        response = HttpResponses.NOT_FOUND
+        if success:
+            response = HttpResponses.OK
+
+        self.__send_response(response)
 
     def __handle_unsupported_request(self, request: HttpRequest):
         """
         Handles an HTTP request of an unexpected method.
         :param request: The request object.
         """
-
-        self.__send_response(HttpResponses.NOT_FOUND) # TODO: remove this stub
-        # TODO: implement
+        self.__log(f"Handling an unsupported request from {self.address}")
+        self.__send_response(HttpResponses.METHOD_NOT_ALLOWED)
 
     def __handle_request(self, request: HttpRequest):
         """
@@ -384,10 +485,6 @@ class RequestHandler:
 
                 return self.__handle_put_request(request)
 
-            case HttpMethod.HEAD:
-
-                return self.__handle_head_request(request)
-
             case HttpMethod.POST:
 
                 return self.__handle_post_request(request)
@@ -403,7 +500,7 @@ class RequestHandler:
     def __send_response(self, response: HttpResponse):
         r = response.to_raw()
 
-        logging.info(f"Sending response:\n{response.to_raw()}\nto:\n{self.address}")
+        self.__log(f"Sending response to {self.address}:\n{response.to_raw()}")
 
         self.connection.send(r.encode())
 
@@ -411,15 +508,18 @@ class RequestHandler:
         request = self.__receive_request(self.connection)
         self.__handle_request(request)
 
+        self.connection.close() # Each connection is only used for 1 request, thus close the connection then done.
+
 
 class ShoddyServer(object):
     """
     HTTP Server class responsible for binding to a socket and listening for connections.
     """
 
-    def __init__(self, host: str, port: int, *, timeout=60):
+    def __init__(self, host: str, port: int, *, timeout=60, content_dir="/content"):
         """
         Creates a new shoddy server to listen for connections.
+        Instantiates a content handler with the given content dir to pass to request handlers.
         :param host: The IP address to use for the server.
         :param port: The port to use for the server.
         :param timeout: The number of seconds to wait for receiving before sending a timeout response.
@@ -428,6 +528,7 @@ class ShoddyServer(object):
         self.port = port
         self.soc = socket(family=AF_INET, type=SOCK_STREAM)
         self.timeout = timeout
+        self.content_handler = ContentHandler(os.getcwd() + content_dir)
 
     def start(self):
         """
@@ -442,7 +543,7 @@ class ShoddyServer(object):
         while running:
             socket, address = self.soc.accept()
             socket.settimeout(self.timeout)
-            RequestHandler(socket, address, timeout=self.timeout).handle()
+            RequestHandler(socket, address, self.content_handler, timeout=self.timeout).handle()
 
         self.soc.close()
         running = False
