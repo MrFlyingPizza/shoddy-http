@@ -500,7 +500,7 @@ class RequestHandler:
     def __send_response(self, response: HttpResponse):
         r = response.to_raw()
 
-        self.__log(f"Sending response to {self.address}:\n{response.to_raw()}")
+        self.__log(f"Sending response to {self.address}:\n{r}")
 
         self.connection.send(r.encode())
 
