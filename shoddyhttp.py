@@ -1,5 +1,12 @@
 import logging
 import select
+import os
+import cgi
+import cgitb
+cgitb.enable()
+import io
+import mimetypes
+
 from enum import Enum
 from socket import socket, AF_INET, SOCK_STREAM
 from typing import Tuple, Dict
@@ -7,6 +14,8 @@ from typing import Tuple, Dict
 HostAndPort = Tuple[str, str]
 
 Headers = Dict[str, any]
+
+path = os.getcwd()
 
 
 class HttpMethod(Enum):
@@ -201,6 +210,45 @@ class RequestHandler:
         self.address = address
         self.timeout = timeout
 
+    # ---------------------------------------------------------------------------Added here
+    headers = {
+        'Server': 'ShoddyServer',
+        'Content-Type': 'text/html',
+    }
+
+    status_codes = {
+        200: 'OK',
+        404: 'Not Found',
+        501: 'Not Implemented',
+    }
+
+    
+    def response_line(self, status_code):
+        """Returns response line (as bytes)"""
+        reason = self.status_codes[status_code]
+        response_line = 'HTTP/1.1 %s %s\r\n' % (status_code, reason)
+
+        return response_line.encode() # convert from str to bytes
+
+    def response_headers(self, extra_headers=None):
+        """Returns headers (as bytes).
+        The `extra_headers` can be a dict for sending 
+        extra headers with the current response
+        """
+        headers_copy = self.headers.copy() # make a local copy of headers
+
+        if extra_headers:
+            headers_copy.update(extra_headers)
+
+        headers = ''
+
+        for h in headers_copy:
+            headers += '%s: %s\r\n' % (h, headers_copy[h])
+
+        return headers.encode() # convert str to bytes
+
+    #-----------------------------------------------------------------------------------------------End added------------------
+
     def __receive_request(self, conn: socket) -> HttpRequest | None:
         """
         Receive all data from a connection, and send timeout the connection if no activity for too long.
@@ -213,6 +261,7 @@ class RequestHandler:
 
         return http_request_from_raw(s)
 
+
     def __handle_get_request(self, request: HttpRequest):
         """
         Handles an HTTP request with the GET method.
@@ -223,8 +272,33 @@ class RequestHandler:
         if request.method != HttpMethod.GET:
             raise InvalidHttpMethodError(HttpMethod.GET, request.method, self.__INVALID_METHOD_MESSAGE)
 
-        self.__send_response(HttpResponses.NOT_FOUND) # TODO: remove this stub
-        # TODO: implement
+        
+        # TODO: implemented
+        path = request.url.strip('/')
+
+
+        if os.path.exists(path) and not os.path.isdir(path): # don't serve directories
+            response_line = self.response_line(200)
+
+            # find out a file's MIME type
+            # if nothing is found, just send `text/html`
+            content_type = mimetypes.guess_type(path)[0] or 'text/html'
+
+            extra_headers = {'Content-Type': content_type}
+            response_headers = self.response_headers(extra_headers)
+
+            with open(path, 'rb') as f:
+                response_body = f.read()
+        else:
+            response_line = self.response_line(404)
+            response_headers = self.response_headers()
+            response_body = b'<h1>404 Not Found</h1>'
+
+        blank_line = b'\r\n'
+
+        response = b''.join([response_line, response_headers, blank_line, response_body])
+        self.connection.send(response)
+
 
     def __handle_put_request(self, request: HttpRequest):
         """
@@ -236,8 +310,18 @@ class RequestHandler:
         if request.method != HttpMethod.PUT:
             raise InvalidHttpMethodError(HttpMethod.PUT, request.method, self.__INVALID_METHOD_MESSAGE)
 
-        self.__send_response(HttpResponses.NOT_FOUND) # TODO: remove this stub
         # TODO: implement
+        # self.__send_response(HttpResponses.NOT_FOUND)
+
+        import os
+        form = cgi.FieldStorage
+        fi = form.getvalue("filename")
+        if os.path.exists(fi):
+            # This code will strip the leading absolute path from your file-name
+            fil = os.path.basename(fi)
+            # open for reading & writing the file into the server
+            open(fil, 'wb').write(fi.file.read())
+
 
     def __handle_post_request(self, request: HttpRequest):
         """
@@ -373,7 +457,7 @@ def main():
     host = "127.0.0.1"
     port = 80
     logging.info("Creating server")
-    ShoddyServer(host, port, timeout=5).start()
+    ShoddyServer(host, port, timeout=100).start()
     logging.info("Stopped server")
 
 

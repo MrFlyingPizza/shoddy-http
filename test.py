@@ -98,8 +98,5 @@ class HttpResponseObjectTest(unittest.TestCase):
         self.assertEqual(expected_string, HttpResponse(headers=headers).to_raw())
 
 
-
-
-
 if __name__ == "__main__":
     unittest.main()
