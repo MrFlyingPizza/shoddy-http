@@ -223,7 +223,7 @@ class RequestHandler:
         if request.method != HttpMethod.GET:
             raise InvalidHttpMethodError(HttpMethod.GET, request.method, self.__INVALID_METHOD_MESSAGE)
 
-        self.__send_response(HttpResponses.NOT_FOUND)
+        self.__send_response(HttpResponses.NOT_FOUND) # TODO: remove this stub
         # TODO: implement
 
     def __handle_put_request(self, request: HttpRequest):
@@ -236,7 +236,7 @@ class RequestHandler:
         if request.method != HttpMethod.PUT:
             raise InvalidHttpMethodError(HttpMethod.PUT, request.method, self.__INVALID_METHOD_MESSAGE)
 
-        self.__send_response(HttpResponses.NOT_FOUND)
+        self.__send_response(HttpResponses.NOT_FOUND) # TODO: remove this stub
         # TODO: implement
 
     def __handle_post_request(self, request: HttpRequest):
@@ -249,7 +249,7 @@ class RequestHandler:
         if request.method != HttpMethod.POST:
             raise InvalidHttpMethodError(HttpMethod.POST, request.method, self.__INVALID_METHOD_MESSAGE)
 
-        self.__send_response(HttpResponses.NOT_FOUND)
+        self.__send_response(HttpResponses.NOT_FOUND) # TODO: remove this stub
         # TODO: implement
 
     def __handle_head_request(self, request: HttpRequest):
@@ -260,7 +260,7 @@ class RequestHandler:
         if request.method != HttpMethod.HEAD:
             raise InvalidHttpMethodError(HttpMethod.HEAD, request.method, self.__INVALID_METHOD_MESSAGE)
 
-        self.__send_response(HttpResponses.NOT_FOUND)
+        self.__send_response(HttpResponses.NOT_FOUND) # TODO: remove this stub
         # TODO: implement
 
     def __handle_delete_request(self, request: HttpRequest):
@@ -273,7 +273,7 @@ class RequestHandler:
         if request.method != HttpMethod.DELETE:
             raise InvalidHttpMethodError(HttpMethod.DELETE, request.method, self.__INVALID_METHOD_MESSAGE)
 
-        self.__send_response(HttpResponses.NOT_FOUND)
+        self.__send_response(HttpResponses.NOT_FOUND) # TODO: remove this stub
         # TODO: implement
 
     def __handle_unsupported_request(self, request: HttpRequest):
@@ -282,7 +282,7 @@ class RequestHandler:
         :param request: The request object.
         """
 
-        self.__send_response(HttpResponses.NOT_FOUND)
+        self.__send_response(HttpResponses.NOT_FOUND) # TODO: remove this stub
         # TODO: implement
 
     def __handle_request(self, request: HttpRequest):
