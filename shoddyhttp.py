@@ -1,4 +1,5 @@
 import logging
+import select
 from enum import Enum
 from socket import socket, AF_INET, SOCK_STREAM
 from typing import Tuple, Dict
@@ -46,6 +47,18 @@ class HttpStatusMessage(Enum):
     BAD_REQUEST = "Bad Request"
     NOT_FOUND = "Not Found"
     REQUEST_TIMED_OUT = "Request Timed Out"
+
+
+class InvalidHttpMethodError(Exception):
+    def __init__(self, expected: HttpMethod, actual: HttpMethod,
+                 message="The given http method does not match the one expected."):
+        self.expected = expected
+        self.actual = actual
+        self.message = message
+        super().__init__(self.message)
+
+    def __str__(self):
+        return f"{self.message} Expected: {self.expected} Actual: {self.actual}"
 
 
 class HttpResponse:
@@ -167,18 +180,18 @@ class HttpResponses:
     A class for holding typical responses that can be used repeatedly, like Request Timed Out or Not Found.
     """
     TIMEOUT = HttpResponse(status=HttpStatusCode.REQUEST_TIMED_OUT)
-    TIMEOUT_BYTES = TIMEOUT.to_raw().encode()
 
-    NOT_FOUND = HttpResponse(status=HttpStatusCode.NOT_FOUND)
-    NOT_FOUND_BYTES = NOT_FOUND.to_raw().encode()
+    NOT_FOUND = HttpResponse(status=HttpStatusCode.NOT_FOUND, headers={"Content-Length": 0})
 
 
-class ConnectionHandler:
+class RequestHandler:
     """
-    An instance of this class handles one open HTTP connection. The instance is invalidated if the connection closes.
+    An instance of this class handles an HTTP request through an open connection.
+    The instance is invalidated if the connection closes.
     """
+    __INVALID_METHOD_MESSAGE = "This request handler cannot handle the given request based on its request method."
 
-    def __init__(self, connection: socket, address: HostAndPort, timeout=5):
+    def __init__(self, connection: socket, address: HostAndPort, timeout=60):
         """
         The open connection to handle the request using.
         :param connection: The socket of the open connection.
@@ -194,133 +207,125 @@ class ConnectionHandler:
         :param conn: Socket connection to receive data from.
         :return: All bytes of the data received. None if request timeout.
         """
-        chunks = []
-        receiving = True
-        while receiving:
-            data = None
-            try:
-                conn.settimeout(self.timeout)
-                data = conn.recv(2048)
-                conn.settimeout(None)
-
-                chunks.append(data)
-
-            except TimeoutError:
-                conn.settimeout(None)
-                conn.send(HttpResponses.TIMEOUT_BYTES)
-                conn.close()
-
-            if not data:
-                receiving = False
-
-        if len(chunks) <= 0:
-            return None
-
-        s = b''.join(chunks).decode()
+        s = conn.recv(8192).decode()
 
         logging.info(f"Received:\n{s}\nfrom:\n{self.address}")
 
         return http_request_from_raw(s)
 
-    def __handle_get_request(self, request: HttpRequest) -> HttpResponse:
+    def __handle_get_request(self, request: HttpRequest):
         """
         Handles an HTTP request with the GET method.
         It gets a file from the file system indicated by the URL path and sends it back.
         Send 404 Not Found if not found by the path.
         :param request: The request object.
-        :return: An HTTP response to send back to the client.
         """
         if request.method != HttpMethod.GET:
-            raise f"GET request handler cannot handle request of {request.method}"
+            raise InvalidHttpMethodError(HttpMethod.GET, request.method, self.__INVALID_METHOD_MESSAGE)
 
+        self.__send_response(HttpResponses.NOT_FOUND)
         # TODO: implement
-        ...
 
-    def __handle_put_request(self, request: HttpRequest) -> HttpResponse:
+    def __handle_put_request(self, request: HttpRequest):
         """
         Handles an HTTP request with the PUT method.
         It should replace a file specified by the URL path.
         Send 404 Not Found if not found by the path.
         :param request: The request object.
-        :return: An HTTP response to send back to the client.
         """
         if request.method != HttpMethod.PUT:
-            raise f"PUT request handler cannot handle request of {request.method}"
+            raise InvalidHttpMethodError(HttpMethod.PUT, request.method, self.__INVALID_METHOD_MESSAGE)
 
+        self.__send_response(HttpResponses.NOT_FOUND)
         # TODO: implement
-        ...
 
-    def __handle_post_request(self, request: HttpRequest) -> HttpResponse:
+    def __handle_post_request(self, request: HttpRequest):
         """
         Handles an HTTP request with the POST method.
         It should save the contents of the body to the file system.
         It should send 400 Bad Request if a file already exists by the given path.
         :param request: The request object.
-        :return: An HTTP response to send back to the client.
         """
         if request.method != HttpMethod.POST:
-            raise f"POST request handler cannot handle request of {request.method}"
+            raise InvalidHttpMethodError(HttpMethod.POST, request.method, self.__INVALID_METHOD_MESSAGE)
 
+        self.__send_response(HttpResponses.NOT_FOUND)
         # TODO: implement
-        ...
 
-    def __handle_head_request(self, request: HttpRequest) -> HttpResponse:
+    def __handle_head_request(self, request: HttpRequest):
         """
         Handles an HTTP request with the HEAD method.
         :param request: The request object.
-        :return: An HTTP response to send back to the client.
         """
         if request.method != HttpMethod.HEAD:
-            raise f"HEAD request handler cannot handle request of {request.method}"
+            raise InvalidHttpMethodError(HttpMethod.HEAD, request.method, self.__INVALID_METHOD_MESSAGE)
 
+        self.__send_response(HttpResponses.NOT_FOUND)
         # TODO: implement
-        ...
 
-    def __handle_delete_request(self, request: HttpRequest) -> HttpResponse:
+    def __handle_delete_request(self, request: HttpRequest):
         """
         Handles an HTTP request with the DELETE method.
         It should remove a file specified by the URL path.
         Send 404 Not Found if not found by the path.
         :param request: The request object.
-        :return: An HTTP response to send back to the client.
         """
         if request.method != HttpMethod.DELETE:
-            raise f"DELETE request handler cannot handle request of {request.method}"
+            raise InvalidHttpMethodError(HttpMethod.DELETE, request.method, self.__INVALID_METHOD_MESSAGE)
 
+        self.__send_response(HttpResponses.NOT_FOUND)
         # TODO: implement
-        ...
 
-    def __handle_unsupported_request(self, request: HttpRequest) -> HttpResponse:
+    def __handle_unsupported_request(self, request: HttpRequest):
         """
         Handles an HTTP request of an unexpected method.
         :param request: The request object.
-        :return: An HTTP response to send back to the client.
         """
 
+        self.__send_response(HttpResponses.NOT_FOUND)
         # TODO: implement
-        ...
+
+    def __handle_request(self, request: HttpRequest):
+        """
+        Handles an HTTP request..
+        :param request: The HTTP request.
+        """
+        match request.method:
+
+            case HttpMethod.GET:
+
+                return self.__handle_get_request(request)
+
+            case HttpMethod.PUT:
+
+                return self.__handle_put_request(request)
+
+            case HttpMethod.HEAD:
+
+                return self.__handle_head_request(request)
+
+            case HttpMethod.POST:
+
+                return self.__handle_post_request(request)
+
+            case HttpMethod.DELETE:
+
+                return self.__handle_delete_request(request)
+
+            case _:
+
+                return self.__handle_unsupported_request(request)
+
+    def __send_response(self, response: HttpResponse):
+        r = response.to_raw()
+
+        logging.info(f"Sending response:\n{response.to_raw()}\nto:\n{self.address}")
+
+        self.connection.send(r.encode())
 
     def handle(self):
-        """
-        Handles a connection.
-        :param conn: The connection instance.
-        :param address: The (Host, Port) of the peer.
-        """
         request = self.__receive_request(self.connection)
-
-        match request.method:
-            case HttpMethod.GET:
-                self.__handle_get_request(request)
-            case HttpMethod.PUT:
-                self.__handle_put_request(request)
-            case HttpMethod.HEAD:
-                self.__handle_head_request(request)
-            case HttpMethod.POST:
-                self.__handle_post_request(request)
-            case HttpMethod.DELETE:
-                self.__handle_delete_request(request)
-            case _:
-                self.__handle_unsupported_request(request)
+        self.__handle_request(request)
 
 
 class ShoddyServer(object):
@@ -328,7 +333,7 @@ class ShoddyServer(object):
     HTTP Server class responsible for binding to a socket and listening for connections.
     """
 
-    def __init__(self, host: str, port: int, *, timeout=5):
+    def __init__(self, host: str, port: int, *, timeout=60):
         """
         Creates a new shoddy server to listen for connections.
         :param host: The IP address to use for the server.
@@ -351,7 +356,9 @@ class ShoddyServer(object):
         running = True
 
         while running:
-            ConnectionHandler(*self.soc.accept()).handle()
+            socket, address = self.soc.accept()
+            socket.settimeout(self.timeout)
+            RequestHandler(socket, address, timeout=self.timeout).handle()
 
         self.soc.close()
         running = False
@@ -366,7 +373,7 @@ def main():
     host = "127.0.0.1"
     port = 80
     logging.info("Creating server")
-    ShoddyServer(host, port).start()
+    ShoddyServer(host, port, timeout=5).start()
     logging.info("Stopped server")
 
 
