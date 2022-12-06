@@ -9,7 +9,7 @@ def main():
     host = "127.0.0.1"
     port = 81
     logging.info("Creating proxy server")
-    ShoddyProxy(host, 81, ("127.0.0.1", 80)).start()
+    ShoddyProxy(host, port, ("127.0.0.1", 80)).start()
     logging.info("Stopped proxy server")
 
 
