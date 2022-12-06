@@ -1,3 +1,6 @@
+# CMPT 371 Mini-Project
+# By Han Gao, Tosrif Jahan Sakib
+
 import unittest
 
 from shoddyhttp import HttpRequest, HttpResponse, http_request_from_raw, HttpStatusCode, HttpStatusMessage

@@ -1,3 +1,6 @@
+# CMPT 371 Mini-Project
+# By Han Gao, Tosrif Jahan Sakib
+
 def main():
     pass
 
