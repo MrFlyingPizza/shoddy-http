@@ -341,6 +341,20 @@ class ContentHandler:
 
         return False
 
+    def exists(self, path_str: str) -> bool:
+        """
+        Checks if the file at the specified path exists.
+        :param path_str: The path of the file.
+        :return: Whether the file exists.
+        """
+        path_str = self.__make_path(path_str)
+
+        path = Path(path_str)
+
+        self.__log(f"Handling exists of '{str(path)}'")
+
+        return path.is_file()
+
 
 class RequestHandler:
     """
@@ -364,7 +378,7 @@ class RequestHandler:
         self.timeout = timeout
         self.content_handler = content_handler
 
-    def __log(self, message: str, level: int = logging.INFO):
+    def _log(self, message: str, level: int = logging.INFO):
         """
         Logs message of given level.
         :param message: Message to be logged.
@@ -372,7 +386,7 @@ class RequestHandler:
         """
         logging.log(level, f"{self.__repr__()}: {message}")
 
-    def __receive_request(self, conn: socket) -> HttpRequest | None:
+    def _receive_request(self, conn: socket) -> HttpRequest | None:
         """
         Receive all data from a connection, and send timeout the connection if no activity for too long.
         :param conn: Socket connection to receive data from.
@@ -380,18 +394,18 @@ class RequestHandler:
         """
         s = conn.recv(8192).decode()
 
-        self.__log(f"Received from {self.address}:\n{s}\n")
+        self._log(f"Received from {self.address}:\n{s}\n")
 
         return http_request_from_raw(s)
 
-    def __handle_get_request(self, request: HttpRequest):
+    def _handle_get_request(self, request: HttpRequest):
         """
         Handles an HTTP request with the GET method.
         It gets a file from the file system indicated by the URL path and sends it back.
         Send 404 Not Found if not found by the path.
         :param request: The request object.
         """
-        self.__log(f"Handling GET request from {self.address}")
+        self._log(f"Handling GET request from {self.address}")
         if request.method != HttpMethod.GET:
             raise InvalidHttpMethodError(HttpMethod.GET, request.method, self.__INVALID_METHOD_MESSAGE)
 
@@ -405,16 +419,16 @@ class RequestHandler:
 
             response = HttpResponse(headers=headers, data=content)
 
-        self.__send_response(response)
+        self._send_response(response)
 
-    def __handle_put_request(self, request: HttpRequest):
+    def _handle_put_request(self, request: HttpRequest):
         """
         Handles an HTTP request with the PUT method.
         It should replace a file specified by the URL path.
         Send 404 Not Found if not found by the path.
         :param request: The request object.
         """
-        self.__log(f"Handling PUT request from {self.address}")
+        self._log(f"Handling PUT request from {self.address}")
 
         if request.method != HttpMethod.PUT:
             raise InvalidHttpMethodError(HttpMethod.PUT, request.method, self.__INVALID_METHOD_MESSAGE)
@@ -425,16 +439,16 @@ class RequestHandler:
         if success:
             response = HttpResponses.OK
 
-        self.__send_response(response)
+        self._send_response(response)
 
-    def __handle_post_request(self, request: HttpRequest):
+    def _handle_post_request(self, request: HttpRequest):
         """
         Handles an HTTP request with the POST method.
         It should save the contents of the body to the file system.
         It should send 400 Bad Request if the operation fails.
         :param request: The request object.
         """
-        self.__log(f"Handling POST request from {self.address}")
+        self._log(f"Handling POST request from {self.address}")
 
         if request.method != HttpMethod.POST:
             raise InvalidHttpMethodError(HttpMethod.POST, request.method, self.__INVALID_METHOD_MESSAGE)
@@ -445,16 +459,35 @@ class RequestHandler:
         if success:
             response = HttpResponses.OK
 
-        self.__send_response(response)
+        self._send_response(response)
 
-    def __handle_delete_request(self, request: HttpRequest):
+    def _handle_head_request(self, request: HttpRequest):
+        """
+        Handles an HTTP request with the HEAD method.
+        If a files exists by the request URL, send 200 OK, otherwise 404 Not Found.
+        :param request: The request object.
+        """
+        self._log(f"Handling HEAD request from {self.address}")
+
+        if request.method != HttpMethod.HEAD:
+            raise InvalidHttpMethodError(HttpMethod.HEAD, request.method, self.__INVALID_METHOD_MESSAGE)
+
+        success = self.content_handler.exists(request.url)
+
+        response = HttpResponse(status=HttpStatusCode.NOT_FOUND)
+        if success:
+            response = HttpResponse()
+
+        self._send_response(response)
+
+    def _handle_delete_request(self, request: HttpRequest):
         """
         Handles an HTTP request with the DELETE method.
         It should remove a file specified by the URL path.
         Send 404 Not Found if not found by the path.
         :param request: The request object.
         """
-        self.__log(f"Handling DELETE request from {self.address}")
+        self._log(f"Handling DELETE request from {self.address}")
 
         if request.method != HttpMethod.DELETE:
             raise InvalidHttpMethodError(HttpMethod.DELETE, request.method, self.__INVALID_METHOD_MESSAGE)
@@ -465,53 +498,45 @@ class RequestHandler:
         if success:
             response = HttpResponses.OK
 
-        self.__send_response(response)
+        self._send_response(response)
 
-    def __handle_unsupported_request(self, request: HttpRequest):
+    def _handle_unsupported_request(self, request: HttpRequest):
         """
         Handles an HTTP request of an unexpected method.
         :param request: The request object.
         """
-        self.__log(f"Handling an unsupported request from {self.address}")
-        self.__send_response(HttpResponses.METHOD_NOT_ALLOWED)
+        self._log(f"Handling an unsupported request from {self.address}")
+        self._send_response(HttpResponses.METHOD_NOT_ALLOWED)
 
-    def __handle_request(self, request: HttpRequest):
+    def _handle_request(self, request: HttpRequest):
         """
         Handles an HTTP request..
         :param request: The HTTP request.
         """
         match request.method:
-
             case HttpMethod.GET:
-
-                return self.__handle_get_request(request)
-
+                return self._handle_get_request(request)
             case HttpMethod.PUT:
-
-                return self.__handle_put_request(request)
-
+                return self._handle_put_request(request)
             case HttpMethod.POST:
-
-                return self.__handle_post_request(request)
-
+                return self._handle_post_request(request)
+            case HttpMethod.HEAD:
+                return self._handle_head_request(request)
             case HttpMethod.DELETE:
-
-                return self.__handle_delete_request(request)
-
+                return self._handle_delete_request(request)
             case _:
+                return self._handle_unsupported_request(request)
 
-                return self.__handle_unsupported_request(request)
-
-    def __send_response(self, response: HttpResponse):
+    def _send_response(self, response: HttpResponse):
         r = response.to_raw()
 
-        self.__log(f"Sending response to {self.address}:\n{r}")
+        self._log(f"Sending response to {self.address}:\n{r}")
 
         self.connection.send(r.encode())
 
     def handle(self):
-        request = self.__receive_request(self.connection)
-        self.__handle_request(request)
+        request = self._receive_request(self.connection)
+        self._handle_request(request)
 
         self.connection.close()  # Each connection is only used for 1 request, thus close the connection then done.
 
