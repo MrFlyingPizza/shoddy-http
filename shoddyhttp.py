@@ -1,10 +1,12 @@
 import logging
 import os
 import shutil
+import threading
 
 from enum import Enum
 from pathlib import Path
 from socket import socket, AF_INET, SOCK_STREAM
+from threading import Thread
 from typing import Tuple, Dict
 
 HostAndPort = Tuple[str, str]
@@ -508,12 +510,13 @@ class RequestHandler:
         request = self.__receive_request(self.connection)
         self.__handle_request(request)
 
-        self.connection.close() # Each connection is only used for 1 request, thus close the connection then done.
+        self.connection.close()  # Each connection is only used for 1 request, thus close the connection then done.
 
 
-class ShoddyServer(object):
+class ShoddyHttpServer(object):
     """
-    HTTP Server class responsible for binding to a socket and listening for connections.
+    HTTP server class responsible for binding to a socket and listening for connections.
+    Connections are handled one at a time on a single thread.
     """
 
     def __init__(self, host: str, port: int, *, timeout=60, content_dir="/content"):
@@ -530,6 +533,9 @@ class ShoddyServer(object):
         self.timeout = timeout
         self.content_handler = ContentHandler(os.getcwd() + content_dir)
 
+    def _handle_connection(self, conn, address):
+        RequestHandler(conn, address, self.content_handler, timeout=self.timeout).handle()
+
     def start(self):
         """
         Start the blocking loops that listens for connections.
@@ -541,26 +547,23 @@ class ShoddyServer(object):
         running = True
 
         while running:
-            socket, address = self.soc.accept()
-            socket.settimeout(self.timeout)
-            RequestHandler(socket, address, self.content_handler, timeout=self.timeout).handle()
+            conn, address = self.soc.accept()
+            conn.settimeout(self.timeout)
+            self._handle_connection(conn, address)
 
         self.soc.close()
         running = False
 
 
-def main():
-    logging.basicConfig(
-        format="%(asctime)s - [%(levelname)s]: %(message)s",
-        level=logging.INFO
-    )
+class ConcurrentShoddyHttpServer(ShoddyHttpServer):
+    """
+    HTTP server class responsible for binding to a socket and listening for connections.
+    Connections are handled concurrently by starting a new thread for each connection.
+    """
 
-    host = "127.0.0.1"
-    port = 80
-    logging.info("Creating server")
-    ShoddyServer(host, port, timeout=100).start()
-    logging.info("Stopped server")
+    def __callback(self, conn: socket, address: HostAndPort):
+        logging.info(f"Concurrently handling connection from {address} in thread with ID: '{threading.get_ident()}'")
+        super()._handle_connection(conn, address)
 
-
-if __name__ == "__main__":
-    main()
+    def _handle_connection(self, conn: socket, address: HostAndPort):
+        Thread(target=lambda: self.__callback(conn, address)).start()
