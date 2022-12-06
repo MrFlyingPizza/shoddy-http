@@ -49,14 +49,3 @@ class ShoddyProxy(ConcurrentShoddyHttpServer):
     def _handler_callback(self, conn: socket, address: HostAndPort):
         ProxyRequestHandler(conn, address, content_handler=self.content_handler, destination=self.destination,
                             timeout=self.timeout).handle()
-
-
-def main():
-    host = "127.0.0.1"
-    port = 81
-    logging.info("Creating proxy server")
-    ShoddyProxy(host, 81, ("127.0.0.1", 80)).start()
-
-
-if __name__ == "__main__":
-    main()
