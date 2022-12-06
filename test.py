@@ -3,7 +3,8 @@
 
 import unittest
 
-from shoddyhttp import HttpRequest, HttpResponse, http_request_from_raw, HttpStatusCode, HttpStatusMessage
+from shoddyhttp import HttpRequest, HttpResponse, http_request_from_raw, HttpStatusCode, HttpStatusMessage, \
+    http_response_from_raw
 
 
 class HttpStatusTest(unittest.TestCase):
@@ -78,7 +79,8 @@ class HttpResponseObjectTest(unittest.TestCase):
            "Server: Microsoft-IIS/10.0\r\n"
            "X-Powered-By: ASP.NET\r\n"
            "SN: EC2AMAZ-BSL60ON\r\n"
-           "\r\n")
+           "\r\n"
+           "data")
 
     def test_construction(self):
         headers = {
@@ -96,9 +98,14 @@ class HttpResponseObjectTest(unittest.TestCase):
             "SN": "EC2AMAZ-BSL60ON"
         }
 
+        data = "data"
+
         expected_string = self.raw
 
-        self.assertEqual(expected_string, HttpResponse(headers=headers).to_raw())
+        self.assertEqual(expected_string, HttpResponse(headers=headers, data=data).to_raw())
+
+    def test_construction_from_raw(self):
+        self.assertEqual(self.raw, http_response_from_raw(self.raw).to_raw())
 
 
 if __name__ == "__main__":

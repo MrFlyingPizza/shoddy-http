@@ -3,6 +3,7 @@
 
 import logging
 import os
+import select
 import shutil
 import threading
 
@@ -12,7 +13,7 @@ from socket import socket, AF_INET, SOCK_STREAM
 from threading import Thread
 from typing import Tuple, Dict
 
-HostAndPort = Tuple[str, str]
+HostAndPort = Tuple[str, int]
 
 Headers = Dict[str, any]
 
@@ -120,6 +121,37 @@ class HttpResponse:
         return f"{self.__build_status_line()}{self.__build_headers()}\r\n{self.data}"
 
 
+def http_response_from_raw(raw_response: str) -> HttpResponse:
+    """
+    Makes a HttpResponse instance from the given raw HTTP response message.
+    :param raw_response: The raw HTTP response message.
+    :return: The newly constructed HttpResponse instance.
+    """
+    top_section: str
+    data: str
+    top_section, data = raw_response.split("\r\n\r\n", maxsplit=1)
+    top_lines = top_section.split("\r\n")
+
+    version_str: str
+    status_code_str: str
+    status_message_str: str
+    version_str, status_code_str, status_message_str = top_lines[0].split(" ", maxsplit=2)
+    header_lines = top_lines[1:]
+
+    headers: Headers = {}
+    for line in header_lines:
+        key, value = line.split(": ")
+        headers[key] = value
+
+    version = HttpVersion.UNSUPPORTED
+    if version_str in [val.value for val in HttpVersion]:
+        version = HttpVersion(version_str)
+
+    status_code = HttpStatusCode(int(status_code_str))
+
+    return HttpResponse(version=version, status=status_code, headers=headers, data=data)
+
+
 class HttpRequest:
     """
     Represents an HTTP request.
@@ -178,6 +210,9 @@ def http_request_from_raw(raw_request: str) -> HttpRequest:
     top_section, body = raw_request.split("\r\n\r\n", maxsplit=1)
     top_lines = top_section.split("\r\n")
 
+    method_str: str
+    url: str
+    version_str: str
     method_str, url, version_str = top_lines[0].split(" ")
     header_lines = top_lines[1:]
 
@@ -233,7 +268,7 @@ class ContentHandler:
         """
         path = Path(content_dir)
         if not path.is_dir():
-            self.__log(f"The directory '{str(path)}' does not exist. It will be created.")
+            self._log(f"The directory '{str(path)}' does not exist. It will be created.")
             path.mkdir(parents=True)
 
         self.content_dir = content_dir
@@ -247,7 +282,7 @@ class ContentHandler:
         """
         return self.content_dir + path
 
-    def __log(self, message: str, level: int = logging.INFO):
+    def _log(self, message: str, level: int = logging.INFO):
         """
         Logs message of given level.
         :param message: Message to be logged.
@@ -266,7 +301,7 @@ class ContentHandler:
 
         path = Path(path_str)
 
-        self.__log(f"Handling retrieval of '{str(path)}'")
+        self._log(f"Handling retrieval of '{str(path)}'")
 
         result: str | None = None
         if path.is_file():
@@ -286,7 +321,7 @@ class ContentHandler:
 
         path = Path(path_str)
 
-        self.__log(f"Handling creation of '{str(path)}'")
+        self._log(f"Handling creation of '{str(path)}'")
 
         if path.is_file():
             return False
@@ -307,7 +342,7 @@ class ContentHandler:
 
         path = Path(path_str)
 
-        self.__log(f"Handling deletion of '{str(path)}'")
+        self._log(f"Handling deletion of '{str(path)}'")
 
         if path.is_file():
             path.unlink()
@@ -332,7 +367,7 @@ class ContentHandler:
 
         path = Path(path_str)
 
-        self.__log(f"Handling replacement of '{str(path)}'")
+        self._log(f"Handling replacement of '{str(path)}'")
 
         if path.is_file():
             path.unlink()
@@ -351,7 +386,7 @@ class ContentHandler:
 
         path = Path(path_str)
 
-        self.__log(f"Handling exists of '{str(path)}'")
+        self._log(f"Handling exists of '{str(path)}'")
 
         return path.is_file()
 
@@ -386,13 +421,17 @@ class RequestHandler:
         """
         logging.log(level, f"{self.__repr__()}: {message}")
 
-    def _receive_request(self, conn: socket) -> HttpRequest | None:
+    def _receive_request(self) -> HttpRequest | None:
         """
-        Receive all data from a connection, and send timeout the connection if no activity for too long.
-        :param conn: Socket connection to receive data from.
+        Receive all data from a connection.
         :return: All bytes of the data received. None if request timeout.
         """
-        s = conn.recv(8192).decode()
+        ready, _, _ = select.select([self.connection], [], [], self.timeout)
+
+        if not ready:
+            return None
+
+        s = self.connection.recv(8192).decode()
 
         self._log(f"Received from {self.address}:\n{s}\n")
 
@@ -419,7 +458,7 @@ class RequestHandler:
 
             response = HttpResponse(headers=headers, data=content)
 
-        self._send_response(response)
+        self.send_response(response)
 
     def _handle_put_request(self, request: HttpRequest):
         """
@@ -439,7 +478,7 @@ class RequestHandler:
         if success:
             response = HttpResponses.OK
 
-        self._send_response(response)
+        self.send_response(response)
 
     def _handle_post_request(self, request: HttpRequest):
         """
@@ -459,7 +498,7 @@ class RequestHandler:
         if success:
             response = HttpResponses.OK
 
-        self._send_response(response)
+        self.send_response(response)
 
     def _handle_head_request(self, request: HttpRequest):
         """
@@ -478,7 +517,7 @@ class RequestHandler:
         if success:
             response = HttpResponse()
 
-        self._send_response(response)
+        self.send_response(response)
 
     def _handle_delete_request(self, request: HttpRequest):
         """
@@ -498,7 +537,7 @@ class RequestHandler:
         if success:
             response = HttpResponses.OK
 
-        self._send_response(response)
+        self.send_response(response)
 
     def _handle_unsupported_request(self, request: HttpRequest):
         """
@@ -506,7 +545,7 @@ class RequestHandler:
         :param request: The request object.
         """
         self._log(f"Handling an unsupported request from {self.address}")
-        self._send_response(HttpResponses.METHOD_NOT_ALLOWED)
+        self.send_response(HttpResponses.METHOD_NOT_ALLOWED)
 
     def _handle_request(self, request: HttpRequest):
         """
@@ -527,7 +566,7 @@ class RequestHandler:
             case _:
                 return self._handle_unsupported_request(request)
 
-    def _send_response(self, response: HttpResponse):
+    def send_response(self, response: HttpResponse):
         r = response.to_raw()
 
         self._log(f"Sending response to {self.address}:\n{r}")
@@ -535,8 +574,12 @@ class RequestHandler:
         self.connection.send(r.encode())
 
     def handle(self):
-        request = self._receive_request(self.connection)
-        self._handle_request(request)
+        request = self._receive_request()
+
+        if request is None:
+            self.send_response(HttpResponses.TIMEOUT)
+        else:
+            self._handle_request(request)
 
         self.connection.close()  # Each connection is only used for 1 request, thus close the connection then done.
 
@@ -580,7 +623,6 @@ class ShoddyHttpServer(object):
             self._handle_connection(conn, address)
 
         self.soc.close()
-        running = False
 
 
 class ConcurrentShoddyHttpServer(ShoddyHttpServer):
@@ -589,9 +631,9 @@ class ConcurrentShoddyHttpServer(ShoddyHttpServer):
     Connections are handled concurrently by starting a new thread for each connection.
     """
 
-    def __callback(self, conn: socket, address: HostAndPort):
+    def _handler_callback(self, conn: socket, address: HostAndPort):
         logging.info(f"Concurrently handling connection from {address} in thread with ID: '{threading.get_ident()}'")
         super()._handle_connection(conn, address)
 
     def _handle_connection(self, conn: socket, address: HostAndPort):
-        Thread(target=lambda: self.__callback(conn, address)).start()
+        Thread(target=self._handler_callback, args=(conn, address)).start()
